@@ -1,0 +1,261 @@
+<?php
+
+/**
+ * Implementation of hook_action_info().
+ */
+function digres_actions_action_info() {
+  return array(
+    'digres_pop_unit_node_action' => array(
+      'description' => t('Create Unit nodes'),
+      'type' => 'node',
+      'configurable' => FALSE,
+      'hooks' => array('any' => TRUE),
+      ),
+    'digres_pop_award_node_action' => array(
+      'description' => t('Create Award nodes'),
+      'type' => 'node',
+      'configurable' => FALSE,
+      'hooks' => array('any' => TRUE),
+      ),
+    'digres_select_merge_target_action' => array(
+      'description' => t('Select merge target'),
+      'type' => 'node',
+      'configurable' => FALSE,
+      'hooks' => array('any' => TRUE),
+      ),
+    'digres_merge_with_target_action' => array(
+      'description' => t('Merge with target'),
+      'type' => 'node',
+      'configurable' => FALSE,
+      'hooks' => array('any' => TRUE),
+      ),
+  );
+}
+
+/**
+ * Implementation of a Drupal action.
+ * Creates units nodes to match extract field_unit
+ * then creates node_ref from extract to unit 
+ */
+function digres_pop_unit_node_action(&$object, $context = array()) {
+  // get the nid from the object
+  if (isset($object->nid)) {
+    $nid = $object->nid;
+    $node = $object;
+  }
+  elseif (isset($context['nid'])) {
+    $nid = $context['nid'];
+    $node = node_load($nid);
+  }
+  else {
+    global $node;
+    $nid = $node->nid;
+  }
+  // make sure we have a node record
+  if ($nid) {
+    if ($node->type == 'extract') {
+      create_unit($node->field_unit[0]['value'], $node);
+    }
+  }
+}
+
+/**
+ * Implementation of a Drupal action.
+ * Creates award nodes to match unit field_awarf
+ * then creates node_ref from unit to award 
+ */
+function digres_pop_award_node_action(&$object, $context = array()) {
+  // get the nid from the object
+  if (isset($object->nid)) {
+    $nid = $object->nid;
+    $node = $object;
+  }
+  elseif (isset($context['nid'])) {
+    $nid = $context['nid'];
+    $node = node_load($nid);
+  }
+  else {
+    global $node;
+    $nid = $node->nid;
+  }
+  // make sure we have a node record
+  if ($nid) {
+    if ($node->type == 'unit') {
+      create_award($node->field_award[0]['value'], $node);
+      watchdog('action', 'Created award from unit (unit nid %nid).', array('%nid' => $nid));
+    }
+  }
+}
+
+
+/**
+ * Implementation of a Drupal action.
+ * Selects a node to act as the target of any following node merges
+ * empty fields in this node will be populated
+ * node references to duplicates are then changed to merge target
+ */
+
+function digres_select_merge_target_action(&$object, $context = array()) {
+  // get the nid from the object
+  if (isset($object->nid)) {
+    $nid = $object->nid;
+    $node = $object;
+  }
+  elseif (isset($context['nid'])) {
+    $nid = $context['nid'];
+    $node = node_load($nid);
+  }
+  else {
+    global $node;
+    $nid = $node->nid;
+  }
+  // make sure we have a node record
+  if ($nid) {
+    if ($node->type == 'award') {
+      drupal_set_message('Node '. $nid .' selected as merge target');
+      $_SESSION['merge_target_nid'] = $nid;
+      watchdog('action', 'Node %nid selected as merge target', array('%nid' => $nid));   
+    }
+  }
+}
+
+/**
+ * Implementation of a Drupal action.
+ * merge nodes with selected merge target (above)
+ */
+
+function digres_merge_with_target_action(&$object, $context = array()) {
+  
+  if (isset($_SESSION['merge_target'])){
+    if (isset($object->nid)) {
+      $nid = $object->nid;
+      $node = $object;
+    }
+    elseif (isset($context['nid'])) {
+      $nid = $context['nid'];
+      $node = node_load($nid);
+    }
+    else {
+      global $node;
+      $nid = $node->nid;
+    }
+  
+    if ($nid) {
+      if ($node->type == 'award' && $nid != $_SESSION['merge_target_nid']) { 
+        $query = 'UPDATE content_field_unit_ref 
+        SET field_unit_ref_nid = '. $_SESSION['merge_target_nid'] .' 
+        WHERE field_unit_ref_nid = $nid';
+        db_query($query);
+      }
+    }
+  }
+  else {
+    drupal_set_message('A merge target has not been selected');
+  }
+}
+
+
+function create_unit($unit_code=NULL, $refnode=NULL){
+  if ($unit_code) {
+    // unit codes may be messy compilations such as 'TD102, FD102, ID102, 3D102, CC102'
+    $unit_code = str_replace('/',',', $unit_code);
+    $unit_code = str_replace(' ','', $unit_code);
+    $unit_codes = explode(',', $unit_code);
+    dpm($unit_codes);
+  
+    foreach($unit_codes as $unit_code) {
+          // check for duplicates first
+          $existing_unit = node_load(array('title'=> $unit_code));
+          
+          // if no duplicates on unit code, create unit node
+          if (!is_object($existing_unit)) {
+            //global $user;
+            $user = user_load(array('name' => 'importer'));
+            $node = new stdClass();
+            $node->title = $unit_code;
+            $node->type = "unit";
+            $node->language = 'en'; // Or e.g. 'en' if locale is enabled
+            $node->uid = $user->uid; 
+            $node->status = 1; //(1 or 0): published or not
+            $node->promote = 0; //(1 or 0): promoted to front page
+            $node->comment = 1; //2 = comments on, 1 = comments off
+            // if unit is created from referencing node, populate fields
+            if ($refnode) {
+              $node->field_unit_name[0]['value'] = $refnode->field_unit_name[0]['value'];   
+              $node->field_award[0]['value'] = $refnode->field_course[0]['value'];
+              $node->field_institution[0]['nid'] = $refnode->field_institution[0]['nid'];
+              $institution = node_load($refnode->field_institution[0]['nid']);
+              $node->field_institution_name[0]['value'] = $institution->title;   
+            }  
+            $node = node_submit($node); // Prepare node for saving
+            
+            node_save($node);
+            $existing_unit = new stdClass;
+            $existing_unit->nid = $node->nid;
+            
+            watchdog('action', 'Created unit from extract (extract nid %nid).', array('%nid' => $existing_unit->nid));
+          }
+          else { watchdog('action', 'unit '.$unit_code .' already exists (nid:'. $existing_unit->nid .')');}
+          
+          if ($refnode) {
+            // link extract to unit
+            $refnode->field_unit_ref[]['nid'] = $existing_unit->nid;
+            watchdog('action', 'Extract '. $refnode->nid .' attached to unit '. $existing_unit->nid);
+            $refnode = node_submit($refnode);
+            node_save($refnode);
+          }
+    }
+  }
+  else {
+    if (is_object($refnode)) {drupal_set_message(t('Could not create unit from extract %nid - no unit code given', array('%nid' => $refnode->nid)));}
+    else {drupal_set_message('Could not create unit from extract - no unit code given');}
+    watchdog('action', 'Could not create unit from extract - no unit code given');
+  }
+}
+
+
+function create_award($award_name=NULL, $refnode=NULL){
+  if ($award_name) {
+    // check for duplicates first
+    $existing_award = node_load(array('title'=> $award_name));
+    // if no duplicates on award code, create award node
+    if (!is_object($existing_award)) {
+      //global $user;
+      $user = user_load(array('name' => 'importer'));
+      $node = new stdClass();
+      $node->title = $award_name;
+      $node->type = "award";
+      $node->language = 'en'; // Or e.g. 'en' if locale is enabled
+      $node->uid = $user->uid; 
+      $node->status = 1; //(1 or 0): published or not
+      $node->promote = 0; //(1 or 0): promoted to front page
+      $node->comment = 1; //2 = comments on, 1 = comments off
+      // if award is created from referencing node, populate fields
+      if ($refnode) {
+        $node->field_award_name[0]['value'] = $refnode->field_award[0]['value'];   
+        $node->field_institution[0]['nid'] = $refnode->field_institution[0]['nid'];
+      }  
+      $node = node_submit($node); // Prepare node for saving
+      
+      node_save($node);
+      $existing_award = new stdClass;
+      $existing_award->nid = $node->nid;
+      
+      watchdog('action', 'Created award from unit (unit nid %nid).', array('%nid' => $existing_award->nid));
+    }
+    else { watchdog('action', 'award '.$award_name .' already exists (nid:'. $existing_award->nid .')');}
+    
+    if ($refnode) {
+      // link unit to award
+      $refnode->field_award_ref[0]['nid'] = $existing_award->nid;
+      watchdog('action', 'unit '. $refnode->nid .' attached to award '. $existing_award->nid);
+      $refnode = node_submit($refnode);
+      node_save($refnode);
+    }
+  }
+  else {
+    if (is_object($refnode)) {drupal_set_message(t('Could not create award from unit %nid - no award name given', array('%nid' => $refnode->nid)));}
+    else {drupal_set_message('Could not create award from unit - no award name given');}
+    watchdog('action', 'Could not create award from unit - no award name given');
+  }
+}

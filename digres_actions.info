@@ -1,0 +1,6 @@
+name = digRes Actions
+description = Actions to use with VBO,primarily for migration
+core = 6.x
+package = Example modules
+dependencies[] = digres_unit_ct
+
